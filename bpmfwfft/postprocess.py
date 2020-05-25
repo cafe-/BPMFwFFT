@@ -435,7 +435,7 @@ class PostProcess(object):
 
         data["std"] = standard_dev
 
-        pickle.dump(data, open(file, "w"))
+        pickle.dump(data, open(file, "wb"))
         return None
 
     def write_rececptor_pdb(self, file):

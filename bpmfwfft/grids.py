@@ -2,6 +2,8 @@
 from __future__ import print_function
 
 import os
+import re
+import concurrent.futures
 
 import numpy as np
 import netCDF4
@@ -11,6 +13,45 @@ from util import c_is_in_grid, cdistance, c_containing_cube
 from util import c_cal_charge_grid
 from util import c_cal_potential_grid
 
+def process_potential_grid_function(
+        name: str,
+        crd: np.ndarray,
+        origin_crd: np.ndarray,
+        grid_spacing: np.ndarray,
+        grid_counts: np.ndarray,
+        charges: np.ndarray,
+        prmtop_ljsigma: np.ndarray
+):
+    """
+    gets called by cal_potential_grid and assigned to a new python process
+    use cython to calculate electrostatic, LJa, LJr, and occupancy grids
+    and save them to nc file
+    """
+    print("calculating %s grid" % name)
+    grid_x = np.linspace(
+        origin_crd[0],
+        origin_crd[0] + ((grid_counts[0]-1) * grid_spacing[0]),
+        num=grid_counts[0]
+    )
+    grid_y = np.linspace(
+        origin_crd[1],
+        origin_crd[1] + ((grid_counts[1] - 1) * grid_spacing[1]),
+        num=grid_counts[1]
+    )
+    grid_z = np.linspace(
+        origin_crd[2],
+        origin_crd[2] + ((grid_counts[2] - 1) * grid_spacing[2]),
+        num=grid_counts[2]
+    )
+    uper_most_corner_crd = origin_crd + (grid_counts - 1.) * grid_spacing
+    uper_most_corner = (grid_counts - 1)
+
+    grid = c_cal_potential_grid(name, crd,
+                                grid_x, grid_y, grid_z,
+                                origin_crd, uper_most_corner_crd, uper_most_corner,
+                                grid_spacing, grid_counts,
+                                charges, prmtop_ljsigma)
+    return grid
 
 def is_nc_grid_good(nc_grid_file):
     """
@@ -235,18 +276,23 @@ class LigGrid(Grid):
         """
         spacing = self._grid["spacing"]
         lower_ligand_corner = np.array([self._crd[:,i].min() for i in range(3)], dtype=float) - 1.5*spacing
+        lower_ligand_corner_grid_aligned = lower_ligand_corner - (spacing + lower_ligand_corner % spacing) #new grid aligned variable
         upper_ligand_corner = np.array([self._crd[:,i].max() for i in range(3)], dtype=float) + 1.5*spacing
+        upper_ligand_corner_grid_aligned = upper_ligand_corner + (spacing - upper_ligand_corner % spacing) #new grid aligned variable
+        print("lower ligand corner grid aligned=", lower_ligand_corner_grid_aligned)
+        print("upper ligand corner grid aligned=", upper_ligand_corner_grid_aligned)
         #
-        ligand_box_lenghts = upper_ligand_corner - lower_ligand_corner
+        ligand_box_lenghts = upper_ligand_corner_grid_aligned - lower_ligand_corner_grid_aligned
+        print("ligand_box_lengths=", ligand_box_lenghts)
         if np.any(ligand_box_lenghts < 0):
-            raise RuntimeError("One of the ligand box lenghts are negative")
+            raise RuntimeError("One of the ligand box lengths are negative")
 
         max_grid_indices = np.ceil(ligand_box_lenghts / spacing)
         self._max_grid_indices = self._grid["counts"] - np.array(max_grid_indices, dtype=int)
         if np.any(self._max_grid_indices <= 1):
             raise RuntimeError("At least one of the max grid indices is <= one")
         
-        displacement = self._origin_crd - lower_ligand_corner
+        displacement = self._origin_crd - lower_ligand_corner_grid_aligned  #formerly lower_ligand_corner
         for atom_ind in range(len(self._crd)):
             self._crd[atom_ind] += displacement
         
@@ -380,7 +426,7 @@ class LigGrid(Grid):
 
     def _place_ligand_crd_in_grid(self, molecular_coord):
         """
-        molecular_coord:    2-array, new liagnd coordinate
+        molecular_coord:    2-array, new ligand coordinate
         """
         crd = np.array(molecular_coord, dtype=float)
         natoms = self._prmtop["POINTERS"]["NATOM"]
@@ -392,7 +438,7 @@ class LigGrid(Grid):
 
     def cal_grids(self, molecular_coord=None):
         """
-        molecular_coord:    2-array, new liagnd coordinate
+        molecular_coord:    2-array, new ligand coordinate
         compute charge grids, meaningful_energies, meaningful_corners for molecular_coord
         if molecular_coord==None, self._crd is used
         """
@@ -579,9 +625,25 @@ class RecGrid(Grid):
         self._set_grid_key_value("d1", np.array([0, spacing, 0], dtype=float))
         self._set_grid_key_value("d2", np.array([0, 0, spacing], dtype=float))
         self._set_grid_key_value("spacing", np.array([spacing]*3, dtype=float))
-        
+
+        # function to easily grab a single float from a complex string
+        def get_num(x):
+            return float(''.join(ele for ele in x if ele.isdigit() or ele == '.'))
+
+        # create a regular expression to parse the read lines
+        parser = re.compile(r'\d+.\d+')
+
         for line in open(bsite_file, "r"):
-            exec(line)
+            if line.startswith('com_min = '):
+                com_min = [float(i) for i in parser.findall(line)]
+            if line.startswith('com_max = '):
+                com_max = [float(i) for i in parser.findall(line)]
+            if line.startswith('site_R = '):
+                site_R = [float(i) for i in parser.findall(line)][0]
+            if line.startswith('half_edge_length = '):
+                half_edge_length = [float(i) for i in parser.findall(line)][0]
+        #half_edge_length = get_num(line)
+        print("half_edge_length = ", half_edge_length)
         length = 2. * half_edge_length         # TODO: this is not good, half_edge_length is define in bsite_file
         count = np.ceil(length / spacing) + 1
         
@@ -685,20 +747,48 @@ class RecGrid(Grid):
 
     def _cal_potential_grids(self, nc_handle):
         """
-        use cython to calculate each to the grids, save them to nc file
+        Divides each grid calculation into a separate process (electrostatic, LJr, LJa,
+        occupancy) and then divides the grid into slices along the x-axis determined by
+        the "task divisor". Remainders are calculated in the last slice.  This adds
+        multiprocessing functionality to the grid generation.
         """
-        for name in self._grid_func_names:
-            print("calculating %s grid"%name)
-            charges = self._get_charges(name)
-            grid = c_cal_potential_grid(name, self._crd, 
-                                        self._grid["x"], self._grid["y"], self._grid["z"],
-                                        self._origin_crd, self._uper_most_corner_crd, self._uper_most_corner,
-                                        self._grid["spacing"], self._grid["counts"], 
-                                        charges, self._prmtop["LJ_SIGMA"])
+        task_divisor = 4
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            futures = {}
+            for name in self._grid_func_names:
+                futures_array = []
+                for i in range(task_divisor):
+                    counts = np.copy(self._grid["counts"])
+                    counts_x = counts[0] // task_divisor
+                    if i == task_divisor-1:
+                        counts_x += counts[0] % task_divisor
+                    counts[0] = counts_x
 
-            self._write_to_nc(nc_handle, name, grid)
-            self._set_grid_key_value(name, grid)
-            #self._set_grid_key_value(name, None)     # to save memory
+                    grid_start_x = i * (self._grid["counts"][0] // task_divisor)
+                    origin = np.copy(self._origin_crd)
+                    origin[0] = grid_start_x * self._grid["spacing"][0]
+
+                    futures_array.append(executor.submit(
+                        process_potential_grid_function,
+                        name,
+                        self._crd,
+                        origin,
+                        self._grid["spacing"],
+                        counts,
+                        self._get_charges(name),
+                        self._prmtop["LJ_SIGMA"]
+                    ))
+                futures[name] = futures_array
+            for name in futures:
+                grid_array = []
+                for i in range(task_divisor):
+                    partial_grid = futures[name][i].result()
+                    grid_array.append(partial_grid)
+                grid = np.concatenate(tuple(grid_array), axis=0)
+                self._write_to_nc(nc_handle, name, grid)
+                self._set_grid_key_value(name, grid)
+                # self._set_grid_key_value(name, None)     # to save memory
+
         return None
     
     def _exact_values(self, coordinate):

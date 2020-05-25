@@ -11,4 +11,4 @@ com_max = [8.414055744001935, 8.6379033134649248, 8.8994801402480412]
 site_R = 2.0
 # Maximum distance from ligand COM to any atom: 4.1196591486981404
 # in ligand 3dn3A_IBF_900
-half_edge_length = 8.0
+half_edge_length = 16.0

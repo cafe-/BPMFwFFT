@@ -263,7 +263,7 @@ class InpcrdLoad(object):
         for line in inpcrd_lines:
             crd = crd + [float(line[x:x+w]) for x in range(0,len(line),w)]
         
-        crd = np.resize(crd,(len(crd)/3,3))
+        crd = np.resize(crd,(len(crd)//3,3))
         if len( crd ) > natoms:
             print("box size information included but ignored")
             crd = crd[:natoms, :]
