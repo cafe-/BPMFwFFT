@@ -11,7 +11,7 @@ import numpy as np
 import netCDF4
 
 # change this 
-sys.path.append("/home/tnguye46/opt/src/BPMFwFFT/bpmfwfft")
+sys.path.append("/home/jim/BPMFwFFT/bpmfwfft/")
 from md_openmm import OpenMM_TREMD
 
 parser = argparse.ArgumentParser()

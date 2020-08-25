@@ -1,5 +1,5 @@
 """
-run MD, replica exchange (parallel tempering) and calcaulte energy using OpenMM
+run MD, replica exchange (parallel tempering) and calculate energy using OpenMM
 """
 
 from sys import stdout

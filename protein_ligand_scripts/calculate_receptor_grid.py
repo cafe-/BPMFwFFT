@@ -8,7 +8,7 @@ import argparse
 
 
 # change this 
-sys.path.append("/home/tnguye46/opt/src/BPMFwFFT/bpmfwfft")
+sys.path.append("/home/jim/BPMFwFFT/bpmfwfft")
 from grids import RecGrid, is_nc_grid_good
 
 

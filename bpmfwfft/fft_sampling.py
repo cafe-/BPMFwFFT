@@ -4,6 +4,7 @@ given a fixed receptor and an ensemble of ligand coordinates (including rotation
 """
 from __future__ import print_function
 
+import concurrent.futures
 import numpy as np
 import netCDF4
 
@@ -13,6 +14,84 @@ from grids import LigGrid
 
 KB = 0.001987204134799235
 
+def process_calculate_fft(
+    _lig_coord_ensemble,
+    _lig_grid,
+    _beta,
+    _energy_sample_size_per_ligand
+):
+    return_value = []
+    for lig_conf in _lig_coord_ensemble:
+        _lig_grid.cal_grids(molecular_coord=lig_conf)
+
+        energies = _lig_grid.get_meaningful_energies()
+        _nr_finite_energy = energies.shape[0]
+        print("Number of finite energy samples", _nr_finite_energy)
+
+        if energies.shape[0] > 0:
+
+            _mean_energy = energies.mean()
+            _min_energy = energies.min()
+            _energy_std = energies.std()
+
+            exp_energies = -_beta * energies
+            _log_of_divisor = exp_energies.max()
+            exp_energies = np.exp(exp_energies - _log_of_divisor)
+            _exponential_sum = exp_energies.sum()
+            exp_energies /= _exponential_sum
+
+            sample_size = min(exp_energies.shape[0], _energy_sample_size_per_ligand)
+            sel_ind = np.random.choice(exp_energies.shape[0], size=sample_size, p=exp_energies, replace=False)
+            del exp_energies
+
+            _resampled_energies = [energies[ind] for ind in sel_ind]
+            del energies
+            _lig_grid.set_meaningful_energies_to_none()
+
+            trans_vectors = _lig_grid.get_meaningful_corners()
+            _resampled_trans_vectors = [trans_vectors[ind] for ind in sel_ind]
+            del trans_vectors
+
+            _resampled_energies = np.array(_resampled_energies, dtype=float)
+            _resampled_trans_vectors = np.array(_resampled_trans_vectors, dtype=int)
+
+        else:
+
+            _mean_energy = np.inf
+            _min_energy = np.inf
+            _energy_std = np.inf
+
+            _log_of_divisor = 1.
+            _exponential_sum = 0.
+
+            _resampled_energies = np.array([], dtype=float)
+            del energies
+            _lig_grid.set_meaningful_energies_to_none()
+
+            _resampled_trans_vectors = np.array([], dtype=float)
+
+        nc_handle_variables = {
+            "lig_positions": _lig_grid.get_crd(),
+            "lig_com": _lig_grid.get_initial_com(),
+            "volume": _lig_grid.get_box_volume(),
+            "nr_grid_points": _lig_grid.get_number_translations(),
+            "nr_finite_energy": _nr_finite_energy,
+            "exponential_sums": _exponential_sum,
+            "log_of_divisors": _log_of_divisor,
+            "mean_energy": _mean_energy,
+            "min_energy": _min_energy,
+            "energy_std": _energy_std
+        }
+        write_data_key_2_nc = {
+            "resampled_energies": _resampled_energies,
+            "resampled_trans_vectors": _resampled_trans_vectors
+        }
+        return_value.append({
+            "nc_handle_variables": nc_handle_variables,
+            "write_data_key_2_nc": write_data_key_2_nc
+        })
+
+    return return_value
 
 class Sampling(object):
     def __init__(self, rec_prmtop, lj_sigma_scal_fact, rec_inpcrd, 
@@ -302,7 +381,7 @@ class Sampling_PL(Sampling):
         return None
 
     def _do_fft(self, step):
-        print("Doing FFT for step %d"%step)
+        print("Doing FFT2 for step %d"%step)
         lig_conf = self._lig_coord_ensemble[step]
         self._lig_grid.cal_grids(molecular_coord = lig_conf)
 
@@ -355,6 +434,46 @@ class Sampling_PL(Sampling):
         self._save_data_to_nc(step)
         return None
 
+    def run_sampling(self):
+        """
+        """
+        task_divisor = 32
+        # array to send: self._lig_coord_ensemble
+        complete_numb_of_steps = self._lig_coord_ensemble.shape[0]
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            futures = []
+            for i in range(task_divisor):
+                numb_of_steps = complete_numb_of_steps // task_divisor
+                if i == task_divisor - 1:
+                    numb_of_steps += complete_numb_of_steps % task_divisor
+
+                starting_step = i * (complete_numb_of_steps // task_divisor)
+                lig_coord_ensemble_slice = self._lig_coord_ensemble[starting_step:(starting_step + numb_of_steps)]
+
+                futures.append(executor.submit(
+                    process_calculate_fft,
+                    lig_coord_ensemble_slice,
+                    self._lig_grid,
+                    self._beta,
+                    self._energy_sample_size_per_ligand
+                ))
+            result_array = []
+            for i in range(task_divisor):
+                result_array.extend(futures[i].result())
+            for step in range(len(result_array)):
+                result = result_array[step]
+                for key, value in result["nc_handle_variables"].items():
+                    variable = self._nc_handle.variables[key]
+                    numb_of_dimensions = len(variable.shape)
+                    if numb_of_dimensions <= 1:
+                        variable[step] = value
+                    elif numb_of_dimensions <= 2:
+                        variable[step, :] = value
+                    else:
+                        variable[step, :, :] = value
+                for key, value in result["write_data_key_2_nc"].items():
+                    self._write_data_key_2_nc(value, '%s_%d' % (key, step))
+        self._nc_handle.close()
 
 if __name__ == "__main__":
     # test
@@ -373,7 +492,7 @@ if __name__ == "__main__":
 
     ligand_md_trj_file = "../examples/ligand_md/benzene/trajectory.nc"
     lig_coord_ensemble = netCDF4.Dataset(ligand_md_trj_file, "r").variables["positions"][:]
-
+    print("TEST TEST TEST", lig_coord_ensemble)
     sampler = Sampling_PL(rec_prmtop, lj_sigma_scal_fact, rec_inpcrd,
                         bsite_file, grid_nc_file, 
                         lig_prmtop, lig_inpcrd,

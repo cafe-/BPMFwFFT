@@ -87,7 +87,7 @@ if args.submit:
 #PBS -j oe
 #PBS -l nodes=1:ppn=2,walltime=300:00:00
 
-source /home/tnguye46/opt/module/anaconda.sh
+source /home/jtufts/opt/module/anaconda.sh
 date
 python ''' + this_script + \
         ''' --amber_dir ''' + amber_sub_dir + \

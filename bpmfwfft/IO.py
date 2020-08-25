@@ -385,8 +385,8 @@ def write_box( grid, pdb_file_name ):
 
 if __name__ == "__main__":
     # do some test
-    prmtop_file = "../examples/amber/t4_lysozyme/receptor_579.prmtop"
-    inpcrd_file = "../examples/amber/t4_lysozyme/receptor_579.inpcrd"
+    prmtop_file = "../examples/amber/3MXW/3MXW_r_b.prmtop"
+    inpcrd_file = "../examples/amber/3MXW/3MXW_r_b.inpcrd"
 
     prmtop_obj = PrmtopLoad(prmtop_file)
     print(prmtop_obj.get_all_parameters())

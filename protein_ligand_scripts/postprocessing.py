@@ -8,7 +8,7 @@ import sys
 import argparse
 
 # change this 
-sys.path.append("/home/tnguye46/opt/src/BPMFwFFT/bpmfwfft")
+sys.path.append("/home/jim/BPMFwFFT/bpmfwfft")
 from postprocess import PostProcess_PL
 
 parser = argparse.ArgumentParser()

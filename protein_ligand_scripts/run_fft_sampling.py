@@ -11,7 +11,7 @@ import numpy as np
 import netCDF4 as nc
 
 # change this 
-sys.path.append("/home/tnguye46/opt/src/BPMFwFFT/bpmfwfft")
+sys.path.append("/home/jim/BPMFwFFT/bpmfwfft")
 from fft_sampling import Sampling_PL
 
 parser = argparse.ArgumentParser()

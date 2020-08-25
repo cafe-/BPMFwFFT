@@ -14,13 +14,13 @@ from util import c_cal_charge_grid
 from util import c_cal_potential_grid
 
 def process_potential_grid_function(
-        name: str,
-        crd: np.ndarray,
-        origin_crd: np.ndarray,
-        grid_spacing: np.ndarray,
-        grid_counts: np.ndarray,
-        charges: np.ndarray,
-        prmtop_ljsigma: np.ndarray
+        name,
+        crd,
+        origin_crd,
+        grid_spacing,
+        grid_counts,
+        charges,
+        prmtop_ljsigma
 ):
     """
     gets called by cal_potential_grid and assigned to a new python process
@@ -75,7 +75,7 @@ def is_nc_grid_good(nc_grid_file):
 
 class Grid(object):
     """
-    an abstract class that defines some common methods and data atributes 
+    an abstract class that defines some common methods and data attributes
     working implementations are in LigGrid and RecGrid below
     """
     def __init__(self):
@@ -105,7 +105,7 @@ class Grid(object):
         value:  any object
         """
         assert key in self._grid_allowed_keys, key + " is not an allowed key"
-        print("setting " + key)
+        #print("setting " + key)
         if key not in self._grid_func_names:
             print(value)
         self._grid[key] = value
@@ -279,20 +279,22 @@ class LigGrid(Grid):
         lower_ligand_corner_grid_aligned = lower_ligand_corner - (spacing + lower_ligand_corner % spacing) #new grid aligned variable
         upper_ligand_corner = np.array([self._crd[:,i].max() for i in range(3)], dtype=float) + 1.5*spacing
         upper_ligand_corner_grid_aligned = upper_ligand_corner + (spacing - upper_ligand_corner % spacing) #new grid aligned variable
-        print("lower ligand corner grid aligned=", lower_ligand_corner_grid_aligned)
-        print("upper ligand corner grid aligned=", upper_ligand_corner_grid_aligned)
+        #print("lower ligand corner grid aligned=", lower_ligand_corner_grid_aligned)
+        #print("upper ligand corner grid aligned=", upper_ligand_corner_grid_aligned)
         #
-        ligand_box_lenghts = upper_ligand_corner_grid_aligned - lower_ligand_corner_grid_aligned
-        print("ligand_box_lengths=", ligand_box_lenghts)
-        if np.any(ligand_box_lenghts < 0):
+        #ligand_box_lengths = upper_ligand_corner_grid_aligned - lower_ligand_corner_grid_aligned
+        ligand_box_lengths = upper_ligand_corner - lower_ligand_corner
+        #print("ligand_box_lengths=", ligand_box_lengths)
+        if np.any(ligand_box_lengths < 0):
             raise RuntimeError("One of the ligand box lengths are negative")
 
-        max_grid_indices = np.ceil(ligand_box_lenghts / spacing)
+        max_grid_indices = np.ceil(ligand_box_lengths / spacing)
         self._max_grid_indices = self._grid["counts"] - np.array(max_grid_indices, dtype=int)
         if np.any(self._max_grid_indices <= 1):
             raise RuntimeError("At least one of the max grid indices is <= one")
         
-        displacement = self._origin_crd - lower_ligand_corner_grid_aligned  #formerly lower_ligand_corner
+        displacement = self._origin_crd - lower_ligand_corner
+        #displacement = self._origin_crd - lower_ligand_corner_grid_aligned #formerly lower_ligand_corner
         for atom_ind in range(len(self._crd)):
             self._crd[atom_ind] += displacement
         
@@ -509,7 +511,7 @@ class RecGrid(Grid):
                         bsite_file,
                         grid_nc_file,
                         new_calculation=False,
-                        spacing=0.25, extra_buffer=3.0):
+                        spacing=0.25, extra_buffer=3.0):  #default extra_buffer=3.0
         """
         :param prmtop_file_name: str, name of AMBER prmtop file
         :param lj_sigma_scaling_factor: float
@@ -532,7 +534,7 @@ class RecGrid(Grid):
                                 np.array([lj_sigma_scaling_factor], dtype=float))
 
             if bsite_file is not None:
-                print("Rececptor is assumed to be correctely translated such that box encloses binding pocket.")
+                print("Receptor is assumed to be correctly translated such that box encloses binding pocket.")
                 self._cal_grid_parameters_with_bsite(spacing, bsite_file, nc_handle)
                 self._cal_grid_coordinates(nc_handle)
                 self._initialize_convenient_para()
@@ -571,7 +573,7 @@ class RecGrid(Grid):
 
         natoms = self._prmtop["POINTERS"]["NATOM"]
         if natoms != nc_handle.variables["trans_crd"].shape[0]:
-            raise RuntimeError("Number of atoms is wrong in %s"%nc_file_name)
+            raise RuntimeError("Number of atoms is wrong in %s %nc_file_name")
         self._crd = nc_handle.variables["trans_crd"][:]
 
         for key in self._grid_func_names:
@@ -691,6 +693,7 @@ class RecGrid(Grid):
         use this when making box encompassing the whole receptor
         """
         lower_receptor_corner = np.array([self._crd[:,i].min() for i in range(3)], dtype=float)
+        print("LOWER RECEPTOR CORNER", lower_receptor_corner)
         upper_receptor_corner = np.array([self._crd[:,i].max() for i in range(3)], dtype=float)
         
         receptor_box_center = (upper_receptor_corner + lower_receptor_corner) / 2.
@@ -752,7 +755,7 @@ class RecGrid(Grid):
         the "task divisor". Remainders are calculated in the last slice.  This adds
         multiprocessing functionality to the grid generation.
         """
-        task_divisor = 4
+        task_divisor = 32
         with concurrent.futures.ProcessPoolExecutor() as executor:
             futures = {}
             for name in self._grid_func_names:
@@ -903,7 +906,8 @@ if __name__ == "__main__":
     rec_inpcrd_file = "../examples/amber/t4_lysozyme/receptor_579.inpcrd"
     grid_nc_file = "../examples/grid/t4_lysozyme/grid.nc"
     lj_sigma_scaling_factor = 0.8
-    bsite_file = "../examples/amber/t4_lysozyme/measured_binding_site.py"
+    #bsite_file = "../examples/amber/t4_lysozyme/measured_binding_site.py"
+    bsite_file = None
     spacing = 0.25
 
     rec_grid = RecGrid(rec_prmtop_file, lj_sigma_scaling_factor, rec_inpcrd_file, 
